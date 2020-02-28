@@ -129,7 +129,7 @@ when isMainModule:
             else:
                 result = c[0]
 
-    proc wrap(thisModule: string, paths: seq[string]) =
+    proc wrapAUX(thisModule: string, paths: seq[string]) =
         # echo "called wrap for: ", thisModule
         let thisModuleDir = parentDir(thisModule)
 
@@ -153,4 +153,4 @@ when isMainModule:
                 createDir(parentDir(dstPath))
                 writeFile(dstPath, dst)
 
-    dispatchMulti([wrap])
+    dispatchMulti([wrapAUX, cmdName = "wrap"])
