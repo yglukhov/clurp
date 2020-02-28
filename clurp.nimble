@@ -6,7 +6,7 @@ description   = "Slurp C/C++ libraries into Nim world"
 license       = "MIT"
 
 bin = @["clurp"]
-
+installExt = @["nim"]
 # Dependencies
 
 requires "nim >= 0.15.3"
