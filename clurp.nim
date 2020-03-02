@@ -1,102 +1,64 @@
 import os, macros, strutils
-
-when defined(emscripten):
-    proc quoteShellWindows(s: string): string {.compileTime.} =
-      ## Quote s, so it can be safely passed to Windows API.
-      ## Based on Python's subprocess.list2cmdline
-      ## See http://msdn.microsoft.com/en-us/library/17w5ykft.aspx
-      let needQuote = {' ', '\t'} in s or s.len == 0
-
-      result = ""
-      var backslashBuff = ""
-      if needQuote:
-        result.add("\"")
-
-      for c in s:
-        if c == '\\':
-          backslashBuff.add(c)
-        elif c == '\"':
-          result.add(backslashBuff)
-          result.add(backslashBuff)
-          backslashBuff.setLen(0)
-          result.add("\\\"")
-        else:
-          if backslashBuff.len != 0:
-            result.add(backslashBuff)
-            backslashBuff.setLen(0)
-          result.add(c)
-
-      if needQuote:
-        result.add("\"")
-
-    proc quoteShellPosix(s: string): string {.compileTime.} =
-      ## Quote ``s``, so it can be safely passed to POSIX shell.
-      ## Based on Python's pipes.quote
-      const safeUnixChars = {'%', '+', '-', '.', '/', '_', ':', '=', '@',
-                             '0'..'9', 'A'..'Z', 'a'..'z'}
-      if s.len == 0:
-        return "''"
-
-      let safe = s.allCharsInSet(safeUnixChars)
-
-      if safe:
-        return s
-      else:
-        return "'" & s.replace("'", "'\"'\"'") & "'"
-
-    proc quoteShell(s: string): string {.compileTime.} =
-      ## Quote ``s``, so it can be safely passed to shell.
-      when defined(Windows):
-        return quoteShellWindows(s)
-      elif defined(posix):
-        return quoteShellPosix(s)
-      else:
-        {.error:"quoteShell is not supported on your system".}
-else:
-    from osproc import quoteShell
-
-proc clurpCmdLine(thisModule: string, paths: openarray[string], includeDirs: openarray[string]): string {.compileTime.} =
-    var clurp = "clurp"
-    when defined(windows):
-        clurp &= ".cmd"
-    result = clurp & " wrap --thisModule=" & quoteShell(thisModule) & " --paths="
-    var pathes: seq[string]
-    for i, p in paths: pathes.add(quoteShell(p))
-    result.add(pathes.join(":"))
-
-    if includeDirs.len > 0:
-        result &= " --includes="
-        var includes: seq[string]
-        for p in includeDirs: includes.add(quoteShell(p))
-        result.add(includes.join(":"))
-
-proc nimPathWithCPath(thisModuleDir: string, p: string): string =
-    result = thisModuleDir / "clurpcache" / p.extractFilename.changeFileExt("nim")
+const emitSources = defined(android)
 
 proc isHeaderFile(file: string): bool =
     let ext = file.splitFile.ext
     if ext.len == 0: return
     ext[1 .. ^1] in ["h", "hp", "hpp", "h++"]
 
-macro importClurpPaths(thisModuleDir: static[string], paths: openarray[string]): untyped =
-    result = newNimNode(nnkImportStmt)
-    for p in paths:
-        let pp = $p
-        if not pp.isHeaderFile:
-            result.add(newLit(nimPathWithCPath(thisModuleDir, pp)))
+proc nimPathWithCPath(thisModuleDir: string, p: string): string =
+    result = thisModuleDir / "clurpcache" / p.extractFilename.changeFileExt("nim")
 
-template clurp*(paths: static[openarray[string]], includeDirs: static[openarray[string]] = [""]) =
-    const thisModule = instantiationInfo(fullPaths = true).filename
-    const thisModuleDir = parentDir(thisModule)
-    const cmdLine = clurpCmdLine(thisModule, paths, includeDirs)
-    # static: echo "args: ", cmdLine
-    const res = gorgeEx(cmdLine, cache = cmdLine)
-    static:
+when emitSources:
+    import sequtils
+    when defined(emscripten):
+        import quote_emcc
+    else:
+        from osproc import quoteShell
+
+    proc clurpCmdLine(thisModule: string, paths: openarray[string], includeDirs: openarray[string]): string {.compileTime.} =
+        var clurp = "clurp"
+        when defined(windows):
+            clurp &= ".cmd"
+        result = clurp & " wrap --thisModule=" & quoteShell(thisModule) & " --paths="
+        result.add(paths.mapIt(quoteShell(it)).join(":"))
+        if includeDirs.len > 0:
+            result.add(" --includes=" & join(includeDirs.mapIt(quoteShell(it)), ":"))
+
+    macro importClurpPaths(thisModuleDir: static[string], paths: openarray[string]): untyped =
+        result = newNimNode(nnkImportStmt)
+        for p in paths:
+            let pp = $p
+            if not pp.isHeaderFile:
+                result.add(newLit(nimPathWithCPath(thisModuleDir, pp)))
+
+    template clurp*(paths: static[openarray[string]], includeDirs: static[openarray[string]] = [""]) =
+        const thisModule = instantiationInfo(fullPaths = true).filename
+        const thisModuleDir = parentDir(thisModule)
+        const cmdLine = clurpCmdLine(thisModule, paths, includeDirs)
+        const res = gorgeEx(cmdLine, cache = cmdLine)
         when res.exitCode != 0:
             const env = getEnv("PATH")
             {.error: "\nGorge failed command: " & cmdLine & "\nOutput:" & res.output & "\nProbably clurp not in PATH:" & $env.}
 
-    importClurpPaths(thisModuleDir, paths)
+        importClurpPaths(thisModuleDir, paths)
+
+else:
+    macro genCompile(moduleDir: static[string], paths: static[openarray[string]], includes: static[openarray[string]]): untyped =
+        result = newNimNode(nnkStmtList)
+        for p in paths:
+            let lit = newLit(moduleDir / p)
+            result.add quote do:
+                {.compile: `lit`.}
+
+        for i in includes:
+            let lit = newLit(i)
+            result.add quote do:
+                {.passC: "-I" & `lit`.}
+
+    template clurp*(paths: static[openarray[string]], includeDirs: static[openarray[string]] = [""]) =
+        const thisModuleDir = instantiationInfo(fullPaths = true).filename.parentDir()
+        genCompile(thisModuleDir, paths, includeDirs)
 
 when isMainModule:
     import cligen
