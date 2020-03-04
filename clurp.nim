@@ -18,12 +18,15 @@ when emitSources:
 
     proc clurpCmdLine(thisModule: string, paths: openarray[string], includeDirs: openarray[string]): string {.compileTime.} =
         var clurp = "clurp"
-        when defined(windows):
+        when defined(windows) or defined(buildOnWindows):
             clurp &= ".cmd"
-        result = clurp & " wrap --thisModule=" & quoteShell(thisModule) & " --paths="
-        result.add(paths.mapIt(quoteShell(it)).join(":"))
+            template qs(s: string):string = quoteShellWindows(s)
+        else:
+            template qs(s: string):string = quoteShell(s)
+        result = clurp & " wrap " & qs("--thisModule=" & thisModule) & " " &
+            qs("--paths=" & paths.join(":"))
         if includeDirs.len > 0:
-            result.add(" --includes=" & join(includeDirs.mapIt(quoteShell(it)), ":"))
+            result.add(" " & qs("--includes=" & includeDirs.join(":")))
 
     macro importClurpPaths(thisModuleDir: static[string], paths: openarray[string]): untyped =
         result = newNimNode(nnkImportStmt)
@@ -127,7 +130,8 @@ when isMainModule:
 
         var c = Context.new()
         c.allHeaders = @[]
-        c.includes = includes.split(":")
+        for i in includes.split(":"):
+            c.includes.add(thisModuleDir / i)
         for p in paths:
             if p.isHeaderFile: c.allHeaders.add(thisModuleDir / p)
         for p in paths:
