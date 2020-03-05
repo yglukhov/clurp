@@ -131,7 +131,11 @@ when isMainModule:
         var c = Context.new()
         c.allHeaders = @[]
         for i in includes.split(":"):
-            c.includes.add(thisModuleDir / i)
+            # TODO: It seems there's a bug on windows. `i` is relative, but should be absolute. The following `if` is a workaround.
+            if i.isAbsolute:
+                c.includes.add(i)
+            else:
+                c.includes.add(thisModuleDir / i)
         for p in paths:
             if p.isHeaderFile: c.allHeaders.add(thisModuleDir / p)
         for p in paths:
